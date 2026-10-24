@@ -1,0 +1,9 @@
+.env
+node_modules/
+data/
+backups/
+exports/
+problems/
+.venv/
+__pycache__/
+*.py[cod]

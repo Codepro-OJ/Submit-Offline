@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Quản trị kỳ thi · Submit Offline</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/admin.js" defer></script>
+</head>
+<body>
+  <header class="topbar"><div class="brand">CP<span>·</span> Quản trị Offline</div><div id="identity"></div></header>
+  <main>
+    <section id="loginPanel" class="card login-card">
+      <div class="eyebrow">Ban tổ chức</div>
+      <h1>Đăng nhập quản trị</h1>
+      <form id="loginForm">
+        <label>Tên đăng nhập<input name="username" autocomplete="username" required></label>
+        <label>Mật khẩu<input name="password" type="password" autocomplete="current-password" required></label>
+        <button type="submit">Đăng nhập</button>
+      </form>
+    </section>
+    <section id="dashboard" hidden>
+      <div class="exam-heading"><div><div class="eyebrow">Giám sát kỳ thi</div><h1 id="contestName"></h1><p id="contestTime"></p></div><div><button id="refreshButton" class="secondary">Làm mới</button> <button id="logoutButton" class="secondary">Đăng xuất</button></div></div>
+      <div class="stat-grid" id="stats"></div>
+      <div class="admin-grid">
+        <section class="card"><h2>50 bài nộp mới nhất</h2><div class="table-scroll"><table><thead><tr><th>ID</th><th>Thí sinh</th><th>Bài</th><th>Ngôn ngữ</th><th>Trạng thái</th><th>Điểm</th><th>Thời gian</th></tr></thead><tbody id="submissions"></tbody></table></div></section>
+        <section class="card"><h2>50 sự kiện gần nhất</h2><div class="table-scroll"><table><thead><tr><th>Thời gian</th><th>Tài khoản</th><th>Hành động</th></tr></thead><tbody id="audit"></tbody></table></div></section>
+      </div>
+    </section>
+    <p id="message" role="status" aria-live="polite"></p>
+  </main>
+</body>
+</html>

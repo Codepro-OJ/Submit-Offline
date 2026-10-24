@@ -1,0 +1,88 @@
+services:
+  postgres:
+    image: postgres:15-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: offline
+      POSTGRES_USER: offline
+      POSTGRES_PASSWORD: ${OFFLINE_DB_PASSWORD:?Set OFFLINE_DB_PASSWORD in .env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U offline -d offline"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  init:
+    build:
+      context: .
+      target: web
+    command: ["python", "-c", "from offline_oj.db import init_schema; init_schema()"]
+    environment:
+      OFFLINE_DATABASE_URL: postgresql://offline:${OFFLINE_DB_PASSWORD}@postgres:5432/offline
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  web:
+    build:
+      context: .
+      target: web
+    restart: unless-stopped
+    ports:
+      - "${OFFLINE_PORT:-8890}:8890"
+    environment:
+      OFFLINE_CONTEST_KEY: ${OFFLINE_CONTEST_KEY:?Set OFFLINE_CONTEST_KEY in .env}
+      OFFLINE_DATABASE_URL: postgresql://offline:${OFFLINE_DB_PASSWORD}@postgres:5432/offline
+      OFFLINE_REDIS_URL: redis://redis:6379/0
+      OFFLINE_HOST: 0.0.0.0
+      OFFLINE_PORT: 8890
+      OFFLINE_MAX_DB_CONNECTIONS: ${OFFLINE_MAX_DB_CONNECTIONS:-32}
+    volumes:
+      - ${OFFLINE_PROJECT_DIR}/problems:/app/problems:ro
+      - ${OFFLINE_PROJECT_DIR}/backups:/app/backups
+      - ${OFFLINE_PROJECT_DIR}/exports:/app/exports
+    depends_on:
+      init:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+
+  worker:
+    build:
+      context: .
+      target: worker
+    restart: unless-stopped
+    command: ["sh", "-c", "mkdir -p \"$${TMPDIR}\" && python /app/worker.py"]
+    environment:
+      OFFLINE_CONTEST_KEY: ${OFFLINE_CONTEST_KEY:?Set OFFLINE_CONTEST_KEY in .env}
+      OFFLINE_DATABASE_URL: postgresql://offline:${OFFLINE_DB_PASSWORD}@postgres:5432/offline
+      OFFLINE_REDIS_URL: redis://redis:6379/0
+      OFFLINE_SANDBOX_IMAGE: ${OFFLINE_SANDBOX_IMAGE:-codepro-offline-sandbox:1}
+      TMPDIR: ${OFFLINE_PROJECT_DIR:?Set OFFLINE_PROJECT_DIR in .env}/data/tmp
+    volumes:
+      - ${OFFLINE_PROJECT_DIR}:${OFFLINE_PROJECT_DIR}
+      - ${OFFLINE_PROJECT_DIR}/problems:/app/problems:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      init:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+
+volumes:
+  pgdata:
+  redisdata:

@@ -1,0 +1,10 @@
+{
+  "key": "DEMO2026",
+  "name": "Kỳ thi thử offline",
+  "start_at": "2020-01-01T00:00:00Z",
+  "end_at": "2099-01-01T00:00:00Z",
+  "visible": true,
+  "problems": [
+    { "code": "SUM", "name": "Tổng hai số", "time_limit": 2, "memory_limit": 256, "checker": "token" }
+  ]
+}

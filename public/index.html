@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Submit Offline · CodePro</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <header class="topbar"><div class="brand">CP<span>·</span> Submit Offline</div><div id="identity"></div></header>
+  <main>
+    <section id="loginPanel" class="card login-card">
+      <div class="eyebrow">Hệ thống thi nội bộ</div>
+      <h1>Đăng nhập kỳ thi</h1>
+      <p>Truy cập bằng tài khoản thí sinh do ban tổ chức cấp.</p>
+      <form id="loginForm">
+        <label>Tên đăng nhập<input name="username" autocomplete="username" required></label>
+        <label>Mật khẩu<input name="password" type="password" autocomplete="current-password" required></label>
+        <button type="submit">Vào phòng thi</button>
+      </form>
+    </section>
+    <section id="examPanel" hidden>
+      <div class="exam-heading"><div><div class="eyebrow">Kỳ thi offline</div><h1 id="contestName"></h1><p id="contestTime"></p></div><button id="logoutButton" class="secondary">Đăng xuất</button></div>
+      <div class="layout">
+        <aside class="card"><h2>Bài thi</h2><div id="problemList"></div><h2>Bài đã nộp</h2><button id="refreshButton" class="secondary small">Làm mới kết quả</button><div id="submissionList"></div></aside>
+        <section class="card workspace"><div class="eyebrow" id="problemCode"></div><h2 id="problemName">Chọn một bài thi</h2><div id="statement" class="statement"></div><form id="submitForm"><div class="editor-header"><label for="language">Ngôn ngữ</label><select id="language" required></select></div><label for="sourceFile">Nạp mã nguồn từ file .cpp hoặc .py</label><input id="sourceFile" type="file" accept=".cpp,.cc,.cxx,.py,text/plain"><textarea id="source" spellcheck="false" aria-label="Mã nguồn" placeholder="Nhập mã nguồn tại đây..." required></textarea><div class="actions"><span>Bản nháp lưu trên máy này.</span><button type="submit">Nộp bài</button></div></form></section>
+      </div>
+    </section>
+    <p id="message" role="status" aria-live="polite"></p>
+  </main>
+</body>
+</html>

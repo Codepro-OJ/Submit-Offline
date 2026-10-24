@@ -1,0 +1,10 @@
+.env
+data/
+problems/
+backups/
+exports/
+__pycache__/
+*.pyc
+contestants.csv
+.venv/
+tests/
