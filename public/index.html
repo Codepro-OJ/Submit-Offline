@@ -21,11 +21,25 @@
       </form>
     </section>
     <section id="examPanel" hidden>
-      <div class="exam-heading"><div><div class="eyebrow">Kỳ thi offline</div><h1 id="contestName"></h1><p id="contestTime"></p></div><button id="logoutButton" class="secondary">Đăng xuất</button></div>
-      <div class="layout">
+      <div class="exam-heading"><div><div class="eyebrow">Kỳ thi offline</div><h1 id="contestName"></h1><p id="contestTime"></p></div><div class="heading-actions"><button id="examViewButton" type="button" class="secondary active-view">Bài thi</button><button id="backupViewButton" type="button" class="secondary">Sao lưu thư mục</button><button id="logoutButton" type="button" class="secondary">Đăng xuất</button></div></div>
+      <div id="examWorkspace" class="layout">
         <aside class="card"><h2>Bài thi</h2><div id="problemList"></div><h2>Bài đã nộp</h2><button id="refreshButton" class="secondary small">Làm mới kết quả</button><div id="submissionList"></div></aside>
         <section class="card workspace"><div class="eyebrow" id="problemCode"></div><h2 id="problemName">Chọn một bài thi</h2><div id="statement" class="statement"></div><form id="submitForm"><div class="editor-header"><label for="language">Ngôn ngữ</label><select id="language" required></select></div><label for="sourceFile">Nạp mã nguồn từ file .cpp hoặc .py</label><input id="sourceFile" type="file" accept=".cpp,.cc,.cxx,.py,text/plain"><textarea id="source" spellcheck="false" aria-label="Mã nguồn" placeholder="Nhập mã nguồn tại đây..." required></textarea><div class="actions"><span>Bản nháp lưu trên máy này.</span><button type="submit">Nộp bài</button></div></form></section>
       </div>
+      <section id="backupPanel" class="card backup-page" hidden>
+        <div class="eyebrow">Bản sao lưu riêng tư</div>
+        <h2>Sao lưu thư mục bài làm</h2>
+        <p>Chọn thư mục chứa mã nguồn trên máy thi. Máy chủ lưu nguyên cấu trúc thư mục và ghi nhận thời gian, số file, dung lượng. Chức năng này không thay thế nút Nộp bài.</p>
+        <form id="backupForm">
+          <label for="backupFolder">Thư mục bài làm</label>
+          <input id="backupFolder" type="file" webkitdirectory directory multiple required>
+          <p id="folderSummary" class="muted">Chưa chọn thư mục.</p>
+          <progress id="backupProgress" max="100" value="0" hidden></progress>
+          <div class="actions"><span>Tối đa 200 file, tổng 32 MB; mỗi file tối đa 8 MB.</span><button id="backupButton" type="submit">Gửi bản sao lưu</button></div>
+        </form>
+        <h3>Bản sao lưu đã nhận</h3>
+        <div id="backupList" aria-live="polite"></div>
+      </section>
     </section>
     <p id="message" role="status" aria-live="polite"></p>
   </main>

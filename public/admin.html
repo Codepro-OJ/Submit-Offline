@@ -22,6 +22,10 @@
     <section id="dashboard" hidden>
       <div class="exam-heading"><div><div class="eyebrow">Giám sát kỳ thi</div><h1 id="contestName"></h1><p id="contestTime"></p></div><div><button id="refreshButton" class="secondary">Làm mới</button> <button id="logoutButton" class="secondary">Đăng xuất</button></div></div>
       <div class="stat-grid" id="stats"></div>
+      <div class="admin-grid admin-top-grid">
+        <section class="card"><h2>Máy thí sinh đang đăng nhập</h2><p>IP do máy chủ ghi nhận. “Hoạt động cuối” được cập nhật khi trình duyệt gọi API; giám thị có thể giải phóng tài khoản khi thí sinh cần chuyển máy.</p><div class="table-scroll"><table><thead><tr><th>Tài khoản</th><th>IP máy</th><th>Mã thiết bị</th><th>Hoạt động cuối</th><th>Trình duyệt</th><th></th></tr></thead><tbody id="sessions"></tbody></table></div></section>
+        <section class="card"><h2>Thư mục đã sao lưu</h2><div class="table-scroll"><table><thead><tr><th>Thí sinh</th><th>Thời gian</th><th>File</th><th>Dung lượng</th><th></th></tr></thead><tbody id="backups"></tbody></table></div></section>
+      </div>
       <div class="admin-grid">
         <section class="card"><h2>50 bài nộp mới nhất</h2><div class="table-scroll"><table><thead><tr><th>ID</th><th>Thí sinh</th><th>Bài</th><th>Ngôn ngữ</th><th>Trạng thái</th><th>Điểm</th><th>Thời gian</th></tr></thead><tbody id="submissions"></tbody></table></div></section>
         <section class="card"><h2>50 sự kiện gần nhất</h2><div class="table-scroll"><table><thead><tr><th>Thời gian</th><th>Tài khoản</th><th>Hành động</th></tr></thead><tbody id="audit"></tbody></table></div></section>

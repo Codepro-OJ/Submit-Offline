@@ -14,6 +14,7 @@ ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = Path(os.environ.get('OFFLINE_DATA_DIR', ROOT / 'data')).resolve()
 DB_PATH = DATA_DIR / 'oj.sqlite3'
 PROBLEMS_DIR = ROOT / 'problems'
+BACKUPS_DIR = ROOT / 'backups' / 'student-folders'
 LANGUAGES = {'CPP17', 'CPP20', 'PY3'}
 DATABASE_URL = os.environ.get('OFFLINE_DATABASE_URL', '')
 
@@ -134,7 +135,15 @@ def init_schema():
             );
             CREATE TABLE IF NOT EXISTS sessions (
                 token_hash TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id),
-                expires_at TEXT NOT NULL
+                expires_at TEXT NOT NULL, device_hash TEXT NOT NULL DEFAULT '',
+                client_ip TEXT NOT NULL DEFAULT '', user_agent TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL DEFAULT '', last_seen_at TEXT NOT NULL DEFAULT ''
+            );
+            CREATE TABLE IF NOT EXISTS student_backups (
+                id TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id),
+                contest_key TEXT NOT NULL REFERENCES contests(key),
+                file_count INTEGER NOT NULL, bytes INTEGER NOT NULL,
+                sha256 TEXT NOT NULL, created_at TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS submissions (
                 id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id),
@@ -151,7 +160,14 @@ def init_schema():
             );
             CREATE INDEX IF NOT EXISTS submissions_user_contest ON submissions(user_id, contest_key, id DESC);
             CREATE INDEX IF NOT EXISTS submissions_queue ON submissions(status, id);
+            CREATE INDEX IF NOT EXISTS student_backups_user ON student_backups(user_id, contest_key, created_at DESC);
         ''')
+        session_columns = {row['name'] for row in db.execute('PRAGMA table_info(sessions)').fetchall()}
+        for name in ('device_hash', 'client_ip', 'user_agent', 'created_at', 'last_seen_at'):
+            if name not in session_columns:
+                db.execute(f"ALTER TABLE sessions ADD COLUMN {name} TEXT NOT NULL DEFAULT ''")
+        db.execute("DELETE FROM sessions WHERE device_hash='' AND user_id IN (SELECT id FROM users WHERE role='contestant')")
+        db.execute('CREATE UNIQUE INDEX IF NOT EXISTS sessions_one_user ON sessions(user_id)')
         columns = {row['name'] for row in db.execute('PRAGMA table_info(submissions)').fetchall()}
         if 'judge_started_at' not in columns:
             db.execute('ALTER TABLE submissions ADD COLUMN judge_started_at TEXT')
@@ -179,7 +195,15 @@ CREATE TABLE IF NOT EXISTS participations (
     user_id BIGINT NOT NULL REFERENCES users(id), contest_key TEXT NOT NULL REFERENCES contests(key),
     PRIMARY KEY(user_id,contest_key));
 CREATE TABLE IF NOT EXISTS sessions (
-    token_hash TEXT PRIMARY KEY, user_id BIGINT NOT NULL REFERENCES users(id), expires_at TEXT NOT NULL);
+    token_hash TEXT PRIMARY KEY, user_id BIGINT NOT NULL REFERENCES users(id), expires_at TEXT NOT NULL,
+    device_hash TEXT NOT NULL DEFAULT '', client_ip TEXT NOT NULL DEFAULT '',
+    user_agent TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL DEFAULT '',
+    last_seen_at TEXT NOT NULL DEFAULT '');
+CREATE TABLE IF NOT EXISTS student_backups (
+    id TEXT PRIMARY KEY, user_id BIGINT NOT NULL REFERENCES users(id),
+    contest_key TEXT NOT NULL REFERENCES contests(key),
+    file_count INTEGER NOT NULL, bytes BIGINT NOT NULL,
+    sha256 TEXT NOT NULL, created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS submissions (
     id BIGSERIAL PRIMARY KEY, user_id BIGINT NOT NULL REFERENCES users(id),
     contest_key TEXT NOT NULL REFERENCES contests(key),
@@ -193,8 +217,16 @@ CREATE TABLE IF NOT EXISTS audit (
     action TEXT NOT NULL, detail TEXT NOT NULL);
 ALTER TABLE problems ADD COLUMN IF NOT EXISTS checker TEXT NOT NULL DEFAULT 'token';
 ALTER TABLE submissions ADD COLUMN IF NOT EXISTS judge_started_at TEXT;
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS device_hash TEXT NOT NULL DEFAULT '';
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS client_ip TEXT NOT NULL DEFAULT '';
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS user_agent TEXT NOT NULL DEFAULT '';
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS created_at TEXT NOT NULL DEFAULT '';
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS last_seen_at TEXT NOT NULL DEFAULT '';
+DELETE FROM sessions WHERE device_hash='' AND user_id IN (SELECT id FROM users WHERE role='contestant');
+CREATE UNIQUE INDEX IF NOT EXISTS sessions_one_user ON sessions(user_id);
 CREATE INDEX IF NOT EXISTS submissions_user_contest ON submissions(user_id,contest_key,id DESC);
 CREATE INDEX IF NOT EXISTS submissions_queue ON submissions(status,id);
+CREATE INDEX IF NOT EXISTS student_backups_user ON student_backups(user_id,contest_key,created_at DESC);
 '''
 
 
@@ -220,19 +252,21 @@ def audit(db, actor, action, detail):
                (utcnow().isoformat(), actor, action, json.dumps(detail, ensure_ascii=False)))
 
 
-def create_session(db, user_id):
+def create_session(db, user_id, device_hash='', client_ip='', user_agent=''):
     token = secrets.token_urlsafe(32)
     token_hash = hashlib.sha256(token.encode()).hexdigest()
     expires = (utcnow() + timedelta(hours=12)).isoformat()
+    now = utcnow().isoformat()
     db.execute('DELETE FROM sessions WHERE user_id=?', (user_id,))
-    db.execute('INSERT INTO sessions(token_hash,user_id,expires_at) VALUES(?,?,?)',
-               (token_hash, user_id, expires))
+    db.execute('''INSERT INTO sessions(token_hash,user_id,expires_at,device_hash,
+        client_ip,user_agent,created_at,last_seen_at) VALUES(?,?,?,?,?,?,?,?)''',
+        (token_hash, user_id, expires, device_hash, client_ip, user_agent[:256], now, now))
     return token
 
 
 def session_user(db, token):
     token_hash = hashlib.sha256(token.encode()).hexdigest()
-    return db.execute('''SELECT u.id, u.username, u.role FROM sessions s
+    return db.execute('''SELECT u.id, u.username, u.role,s.device_hash,s.client_ip FROM sessions s
         JOIN users u ON u.id=s.user_id WHERE s.token_hash=? AND s.expires_at>?''',
         (token_hash, utcnow().isoformat())).fetchone()
 

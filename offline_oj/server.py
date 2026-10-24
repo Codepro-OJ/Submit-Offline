@@ -2,14 +2,17 @@ import hashlib
 import json
 import logging
 import os
+import secrets
 import threading
 import time
 from contextlib import contextmanager
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from http.cookies import SimpleCookie, CookieError
 from urllib.parse import urlsplit
 
+from . import backup
 from . import db as store
 from . import queue
 
@@ -19,6 +22,8 @@ CONTEST_KEY = os.environ.get('OFFLINE_CONTEST_KEY', '')
 LOGIN_ATTEMPTS = {}
 LOGIN_LOCK = threading.Lock()
 DB_SLOTS = threading.BoundedSemaphore(int(os.environ.get('OFFLINE_MAX_DB_CONNECTIONS', '32')))
+UPLOAD_SLOTS = threading.BoundedSemaphore(4)
+DEVICE_COOKIE = 'offline_device'
 
 
 class ApiError(Exception):
@@ -69,15 +74,38 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         logging.info('%s %s', self.client_address[0], format % args)
 
-    def send_json(self, status, payload):
+    def send_json(self, status, payload, cookie=None):
         body = json.dumps(payload, ensure_ascii=False).encode('utf-8')
         self.send_response(status)
         self.send_header('Content-Type', 'application/json; charset=utf-8')
         self.send_header('Content-Length', str(len(body)))
         self.send_header('Cache-Control', 'no-store')
         self.send_header('X-Content-Type-Options', 'nosniff')
+        if cookie is not None:
+            self.send_header('Set-Cookie', cookie)
         self.end_headers()
         self.wfile.write(body)
+
+    def device_cookie(self):
+        try:
+            cookie = SimpleCookie()
+            cookie.load(self.headers.get('Cookie', ''))
+            value = cookie[DEVICE_COOKIE].value if DEVICE_COOKIE in cookie else ''
+            return value if len(value) <= 128 else ''
+        except CookieError:
+            return ''
+
+    def send_zip(self, path, backup_id):
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/zip')
+        self.send_header('Content-Disposition', f'attachment; filename="exam-backup-{backup_id}.zip"')
+        self.send_header('Content-Length', str(path.stat().st_size))
+        self.send_header('Cache-Control', 'no-store')
+        self.send_header('X-Content-Type-Options', 'nosniff')
+        self.end_headers()
+        with path.open('rb') as file:
+            while chunk := file.read(65536):
+                self.wfile.write(chunk)
 
     def read_json(self):
         try:
@@ -101,6 +129,13 @@ class Handler(BaseHTTPRequestHandler):
         user = store.session_user(db, header[7:])
         if user is None:
             raise ApiError(401, 'Phiên đăng nhập đã hết hạn.')
+        if user['role'] == 'contestant':
+            device_value = self.device_cookie()
+            device_hash = hashlib.sha256(device_value.encode()).hexdigest() if device_value else ''
+            if not device_value or device_hash != user['device_hash'] or self.client_address[0] != user['client_ip']:
+                raise ApiError(401, 'Phiên đăng nhập không thuộc máy này.')
+        db.execute('UPDATE sessions SET last_seen_at=? WHERE token_hash=?',
+                   (store.utcnow().isoformat(), hashlib.sha256(header[7:].encode()).hexdigest()))
         return user
 
     def serve_static(self, path):
@@ -153,7 +188,23 @@ class Handler(BaseHTTPRequestHandler):
                                (hashlib.sha256(token.encode()).hexdigest(),))
                     store.audit(db, user['username'], 'auth.logout', {'ip': self.client_address[0]})
                     db.commit()
-                    return self.send_json(200, {'status': 'logged_out'})
+                    cookie = (f'{DEVICE_COOKIE}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0'
+                              if user['role'] == 'contestant' else None)
+                    return self.send_json(200, {'status': 'logged_out'}, cookie)
+                if path == '/api/admin/session/release' and method == 'POST':
+                    if user['role'] != 'admin':
+                        raise ApiError(403, 'Chỉ ban tổ chức được truy cập.')
+                    username = self.read_json().get('username')
+                    if not isinstance(username, str) or not username:
+                        raise ApiError(400, 'Cần chọn tài khoản thí sinh.')
+                    target = db.execute('SELECT id FROM users WHERE username=? AND role=?',
+                                        (username, 'contestant')).fetchone()
+                    if target is None:
+                        raise ApiError(404, 'Không tìm thấy thí sinh.')
+                    db.execute('DELETE FROM sessions WHERE user_id=?', (target['id'],))
+                    store.audit(db, user['username'], 'auth.release', {'username': username})
+                    db.commit()
+                    return self.send_json(200, {'status': 'released'})
                 if path == '/api/admin/dashboard' and method == 'GET':
                     if user['role'] != 'admin':
                         raise ApiError(403, 'Chỉ ban tổ chức được truy cập.')
@@ -169,10 +220,37 @@ class Handler(BaseHTTPRequestHandler):
                         s.result,s.points,s.created_at FROM submissions s
                         JOIN users u ON u.id=s.user_id WHERE s.contest_key=?
                         ORDER BY s.id DESC LIMIT 50''', (CONTEST_KEY,)).fetchall()
+                    sessions = db.execute('''SELECT u.username,s.client_ip,s.user_agent,
+                        substr(s.device_hash,1,10) AS device,s.created_at,s.last_seen_at
+                        FROM sessions s JOIN users u ON u.id=s.user_id
+                        JOIN participations p ON p.user_id=u.id
+                        WHERE p.contest_key=? AND u.role='contestant' AND s.expires_at>?
+                        ORDER BY s.last_seen_at DESC''', (CONTEST_KEY, store.utcnow().isoformat())).fetchall()
+                    recent_backups = db.execute('''SELECT b.id,u.username,b.file_count,b.bytes,b.created_at
+                        FROM student_backups b JOIN users u ON u.id=b.user_id
+                        WHERE b.contest_key=? ORDER BY b.created_at DESC LIMIT 50''',
+                        (CONTEST_KEY,)).fetchall()
+                    backup_count = db.execute('SELECT COUNT(*) FROM student_backups WHERE contest_key=?',
+                                              (CONTEST_KEY,)).fetchone()[0]
                     audit = db.execute('SELECT at,actor,action,detail FROM audit ORDER BY id DESC LIMIT 50').fetchall()
                     return self.send_json(200, {'contest': dict(contest), 'participants': participants,
                         'counts': {row['status']: row['count'] for row in counts},
-                        'recent': [dict(row) for row in recent], 'audit': [dict(row) for row in audit]})
+                        'recent': [dict(row) for row in recent], 'audit': [dict(row) for row in audit],
+                        'sessions': [dict(row) for row in sessions],
+                        'recent_backups': [dict(row) for row in recent_backups],
+                        'backup_count': backup_count})
+                if path.startswith('/api/admin/backup/') and method == 'GET':
+                    if user['role'] != 'admin':
+                        raise ApiError(403, 'Chỉ ban tổ chức được truy cập.')
+                    backup_id = path.removeprefix('/api/admin/backup/')
+                    row = db.execute('SELECT user_id FROM student_backups WHERE id=? AND contest_key=?',
+                                     (backup_id, CONTEST_KEY)).fetchone()
+                    if row is None:
+                        raise ApiError(404, 'Không tìm thấy bản sao lưu.')
+                    archive = backup.path_for(CONTEST_KEY, row['user_id'], backup_id)
+                    if not archive.is_file():
+                        raise ApiError(404, 'File sao lưu không còn trên máy chủ.')
+                    return self.send_zip(archive, backup_id)
                 if user['role'] != 'contestant':
                     raise ApiError(403, 'Trang này chỉ dành cho thí sinh.')
                 contest = require_contest(db, user)
@@ -200,6 +278,13 @@ class Handler(BaseHTTPRequestHandler):
                         'time_limit': problem['time_limit'], 'memory_limit': problem['memory_limit']}})
                 if method == 'POST' and path == '/api/submit':
                     return self.submit(db, user, contest)
+                if method == 'POST' and path == '/api/backup':
+                    return self.upload_backup(db, user, contest)
+                if method == 'GET' and path == '/api/backups':
+                    rows = db.execute('''SELECT id,file_count,bytes,created_at FROM student_backups
+                        WHERE user_id=? AND contest_key=? ORDER BY created_at DESC LIMIT 20''',
+                        (user['id'], CONTEST_KEY)).fetchall()
+                    return self.send_json(200, {'backups': [dict(row) for row in rows]})
                 if method == 'GET' and path == '/api/submissions':
                     rows = db.execute('''SELECT id,problem_code,language,status,result,points,created_at
                         FROM submissions WHERE user_id=? AND contest_key=? ORDER BY id DESC LIMIT 100''',
@@ -236,7 +321,12 @@ class Handler(BaseHTTPRequestHandler):
         username, password = body.get('username'), body.get('password')
         if not isinstance(username, str) or not isinstance(password, str):
             raise ApiError(400, 'Thiếu tên đăng nhập hoặc mật khẩu.')
-        user = db.execute('SELECT * FROM users WHERE username=?', (username,)).fetchone()
+        if role == 'contestant' and not store.is_postgres():
+            db.execute('BEGIN IMMEDIATE')
+        query = 'SELECT * FROM users WHERE username=?'
+        if role == 'contestant' and store.is_postgres():
+            query += ' FOR UPDATE'
+        user = db.execute(query, (username,)).fetchone()
         if user is None or not store.verify_password(password, user['password_hash']):
             with LOGIN_LOCK:
                 LOGIN_ATTEMPTS.setdefault(ip, []).append(now)
@@ -245,10 +335,58 @@ class Handler(BaseHTTPRequestHandler):
             raise ApiError(401, 'Tên đăng nhập hoặc mật khẩu không đúng.')
         if user['role'] != role:
             raise ApiError(403, 'Tài khoản không được đăng nhập tại trang này.')
-        token = store.create_session(db, user['id'])
-        store.audit(db, username, 'auth.login', {'ip': ip})
+        device_value = self.device_cookie()
+        if role == 'contestant':
+            active = db.execute('SELECT device_hash,client_ip FROM sessions WHERE user_id=? AND expires_at>?',
+                                (user['id'], store.utcnow().isoformat())).fetchone()
+            device_hash = hashlib.sha256(device_value.encode()).hexdigest() if device_value else ''
+            if active and (not device_value or active['device_hash'] != device_hash or active['client_ip'] != ip):
+                store.audit(db, username, 'auth.device_denied', {'ip': ip})
+                db.commit()
+                raise ApiError(409, 'Tài khoản đang đăng nhập trên máy khác. Liên hệ giám thị để chuyển máy.')
+            if not device_value:
+                device_value = secrets.token_urlsafe(32)
+                device_hash = hashlib.sha256(device_value.encode()).hexdigest()
+        else:
+            device_hash = ''
+        token = store.create_session(db, user['id'], device_hash, ip, self.headers.get('User-Agent', ''))
+        store.audit(db, username, 'auth.login', {'ip': ip, 'device': device_hash[:10]})
         db.commit()
-        return self.send_json(200, {'token': token, 'user': {'username': username}})
+        cookie = f'{DEVICE_COOKIE}={device_value}; HttpOnly; SameSite=Strict; Path=/; Max-Age=43200' if role == 'contestant' else None
+        return self.send_json(200, {'token': token, 'user': {'username': username}}, cookie)
+
+    def upload_backup(self, db, user, contest):
+        require_started(contest)
+        end = datetime.fromisoformat(contest['end_at'].replace('Z', '+00:00'))
+        if store.utcnow() > end:
+            raise ApiError(403, 'Kỳ thi đã kết thúc.')
+        try:
+            length = int(self.headers.get('Content-Length', '0'))
+        except ValueError:
+            raise ApiError(400, 'Content-Length không hợp lệ.') from None
+        if length < 1 or length > backup.MAX_REQUEST_BYTES:
+            raise ApiError(413, 'Thư mục vượt giới hạn dung lượng.')
+        if not UPLOAD_SLOTS.acquire(timeout=10):
+            raise ApiError(503, 'Máy chủ đang bận sao lưu. Vui lòng thử lại.')
+        try:
+            self.connection.settimeout(90)
+            body = self.rfile.read(length)
+            if len(body) != length:
+                raise ApiError(400, 'Tải thư mục lên chưa hoàn tất.')
+            try:
+                files, total = backup.parse_folder(body, self.headers.get('Content-Type', ''))
+            except (backup.BackupError, UnicodeError) as error:
+                raise ApiError(400, str(error)) from None
+            saved = backup.save_folder(CONTEST_KEY, user['id'], files, total)
+            db.execute('''INSERT INTO student_backups(id,user_id,contest_key,file_count,bytes,sha256,created_at)
+                VALUES(?,?,?,?,?,?,?)''', (saved['id'], user['id'], CONTEST_KEY, saved['file_count'],
+                saved['bytes'], saved['sha256'], store.utcnow().isoformat()))
+            store.audit(db, user['username'], 'backup.create', {'id': saved['id'],
+                'files': saved['file_count'], 'bytes': saved['bytes']})
+            db.commit()
+            return self.send_json(201, saved)
+        finally:
+            UPLOAD_SLOTS.release()
 
     def submit(self, db, user, contest):
         require_started(contest)

@@ -85,6 +85,16 @@ def requeue(submission_id):
         store.audit(db, 'operator', 'submission.requeue', {'id': submission_id})
 
 
+def release_session(username):
+    with store.transaction() as db:
+        user = db.execute('SELECT id FROM users WHERE username=? AND role=?',
+                          (username, 'contestant')).fetchone()
+        if user is None:
+            raise ValueError('Contestant does not exist')
+        db.execute('DELETE FROM sessions WHERE user_id=?', (user['id'],))
+        store.audit(db, 'operator', 'auth.release', {'username': username})
+
+
 def export_results(contest_key, output):
     with store.transaction() as db:
         rows = db.execute('''SELECT u.username,s.problem_code,s.id,s.points,s.result,s.created_at
@@ -139,6 +149,10 @@ def backup(output):
             for file in store.PROBLEMS_DIR.rglob('*'):
                 if file.is_file():
                     archive.write(file, str(file.relative_to(store.ROOT)))
+            if store.BACKUPS_DIR.exists():
+                for file in store.BACKUPS_DIR.rglob('*.zip'):
+                    if file.is_file() and file.resolve() != output.resolve():
+                        archive.write(file, str(file.relative_to(store.ROOT)))
     finally:
         snapshot.unlink(missing_ok=True)
 
@@ -186,6 +200,8 @@ def main():
     current.add_argument('contest_key')
     retry = commands.add_parser('requeue')
     retry.add_argument('submission_id', type=int)
+    release = commands.add_parser('release-session')
+    release.add_argument('username')
     exported = commands.add_parser('export-results')
     exported.add_argument('contest_key')
     exported.add_argument('output')
@@ -212,6 +228,9 @@ def main():
         elif args.command == 'requeue':
             requeue(args.submission_id)
             print('Requeued', args.submission_id)
+        elif args.command == 'release-session':
+            release_session(args.username)
+            print('Released', args.username)
         elif args.command == 'export-results':
             print('Exported', export_results(args.contest_key, args.output), 'rows')
         elif args.command == 'backup':

@@ -8,7 +8,7 @@ Repository: [Codepro-OJ/Submit-Offline](https://github.com/Codepro-OJ/Submit-Off
 
 ```text
 Submit-Offline/
-├── public/                 Web thí sinh và dashboard quản trị
+├── public/                 Web thí sinh, trang sao lưu và dashboard quản trị
 ├── offline_oj/             API, xác thực, database, hàng đợi, Judge
 ├── judge/Dockerfile        Image biên dịch/chạy mã thí sinh
 ├── config/                 Mẫu cấu hình contest
@@ -51,7 +51,7 @@ python server.py
 python worker.py
 ```
 
-Thí sinh truy cập `http://<IP-máy-chủ>:8890`, ví dụ `http://192.168.10.10:8890`. Ban tổ chức dùng `http://<IP-máy-chủ>:8890/admin` với tài khoản tạo bằng `add-admin` để xem hàng chờ, bài nộp và nhật ký. Chỉ mở cổng 8890 cho mạng thi; không cấp quyền truy cập Docker socket, file `data/` hoặc `problems/` cho máy thí sinh. Dùng switch/VLAN để ngăn các máy thi kết nối trực tiếp với nhau. Đồng bộ đồng hồ máy chủ trước kỳ thi vì giờ mở/đóng dùng đồng hồ server.
+Thí sinh truy cập `http://<IP-máy-chủ>:8890`, ví dụ `http://192.168.10.10:8890`. Ban tổ chức dùng `http://<IP-máy-chủ>:8890/admin` với tài khoản tạo bằng `add-admin` để xem hàng chờ, bài nộp, máy đang đăng nhập, bản sao lưu và nhật ký. Chỉ mở cổng 8890 cho mạng thi; không cấp quyền truy cập Docker socket, file `data/`, `backups/` hoặc `problems/` cho máy thí sinh. Dùng switch/VLAN để ngăn các máy thi kết nối trực tiếp với nhau. Đồng bộ đồng hồ máy chủ trước kỳ thi vì giờ mở/đóng dùng đồng hồ server.
 
 ### Triển khai nhiều phòng thi
 
@@ -73,10 +73,12 @@ docker compose -f compose.yml up -d --scale worker=8 web worker
 ## Vận hành
 
 - Contest và tài khoản được chuẩn bị bằng `manage.py` trước giờ thi. Người dùng chưa được `enroll` không xem đề hoặc nộp bài được.
+- Một tài khoản thí sinh chỉ có một phiên trên một trình duyệt/máy: máy chủ buộc token, cookie thiết bị riêng và IP LAN đã ghi nhận. Đăng nhập lại cùng trình duyệt sẽ thay token cũ; đăng nhập từ máy khác bị từ chối cho đến khi thí sinh đăng xuất hoặc giám thị bấm **Giải phóng** trên dashboard (`python manage.py release-session USERNAME` cũng thực hiện được). Dashboard hiển thị IP, mã thiết bị và lần hoạt động cuối. Trình duyệt không thể đọc tên máy Windows; ban tổ chức nên có bảng đối chiếu IP với phòng/máy. Không đặt reverse proxy che IP thí sinh trước web offline nếu chưa có cơ chế cấp IP đáng tin cậy.
 - Bài nộp được ghi vào database trước khi trả mã submission. Worker lấy bài theo thứ tự, chấm C++17, C++20 hoặc Python 3 và tính điểm theo `points` hoặc nhóm `group` trong `tests.json`.
+- Trang **Sao lưu thư mục** cho thí sinh chọn folder bài làm, gửi tối đa 200 file/32 MB (mỗi file tối đa 8 MB). Máy chủ lưu ZIP riêng tư cùng manifest SHA-256 và lịch sử theo tài khoản/kỳ thi; giám thị có thể tải ZIP từ dashboard. Bản sao lưu giữ file để phục hồi, không được chấm thay cho thao tác **Nộp bài**. Chỉ nhận sao lưu trong thời gian thi.
 - Mỗi lượt biên dịch/chạy mở một container Docker không có mạng, giới hạn CPU/RAM/PID, hạ quyền và chỉ gắn file cần thiết. Đáp án `.out` không được gắn vào container chạy bài thí sinh.
 - Giám sát bằng `python manage.py status DEMO2026`. Bài lỗi hệ thống `IE` có thể đưa vào hàng đợi lại bằng `python manage.py requeue ID` sau khi khắc phục nguyên nhân.
-- Sau thi, chạy `python manage.py export-results DEMO2026 exports/results.csv` và `python manage.py backup backups/exam.zip` (hoặc chạy các lệnh này qua `docker compose run --rm web` khi dùng Compose). Bản backup chứa database, mã nguồn bài nộp và test, nên cần cất ở nơi chỉ ban tổ chức truy cập. Với PostgreSQL, backup chứa `data/database.sql`.
+- Sau thi, chạy `python manage.py export-results DEMO2026 exports/results.csv` và `python manage.py backup backups/exam.zip` (hoặc chạy các lệnh này qua `docker compose run --rm web` khi dùng Compose). Bản backup chứa database, mã nguồn bài nộp, test và ZIP thư mục thí sinh, nên cần cất ở nơi chỉ ban tổ chức truy cập. Với PostgreSQL, backup chứa `data/database.sql`.
 - Chạy `python -m unittest discover -s tests` để kiểm tra API, `python tests/judge_smoke.py` để thử chấm bằng Docker, và `python tests/postgres_smoke.py` để thử PostgreSQL cùng nhiều worker nhận bài song song. Bài thử PostgreSQL cần `pip install -r requirements.txt` và `docker build --target web -t codepro-offline-web:test .`.
 
 GitHub Actions chạy unit test và kiểm tra cú pháp trên mỗi lần đẩy mã. Hai bài smoke dùng Docker cần chạy trước kỳ thi trên máy có Docker Engine.
