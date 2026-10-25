@@ -34,6 +34,13 @@ def mount(directory, target, readonly=True):
     return ['--mount', spec]
 
 
+def sandbox_writable(directory):
+    """Let the unprivileged container write without opening host permissions."""
+    if os.name == 'posix':
+        os.chown(directory, 65534, 65534)
+        os.chmod(directory, 0o700)
+
+
 def score_cases(cases, statuses):
     total = earned = 0.0
     groups = {}
@@ -72,7 +79,7 @@ def judge_submission(submission):
         source_dir, binary_dir = root / 'source', root / 'binary'
         source_dir.mkdir()
         binary_dir.mkdir()
-        os.chmod(binary_dir, 0o777)
+        sandbox_writable(binary_dir)
         language = submission['language']
         filename = 'main.py' if language == 'PY3' else 'main.cpp'
         (source_dir / filename).write_text(submission['source'], encoding='utf-8')
@@ -90,7 +97,7 @@ def judge_submission(submission):
         for index, case in enumerate(cases, 1):
             case_dir = root / f'case-{index}'
             case_dir.mkdir()
-            os.chmod(case_dir, 0o777)
+            sandbox_writable(case_dir)
             (case_dir / 'input').write_bytes((problem_dir / f'{index}.in').read_bytes())
             command = 'python3 /src/main.py' if language == 'PY3' else '/program/program'
             script = f'ulimit -f 2048; timeout -k 1s {time_limit}s {command} < /case/input > /out/output'
