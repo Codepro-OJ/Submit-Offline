@@ -136,6 +136,9 @@ class Handler(BaseHTTPRequestHandler):
                 raise ApiError(401, 'Phiên đăng nhập không thuộc máy này.')
         db.execute('UPDATE sessions SET last_seen_at=? WHERE token_hash=?',
                    (store.utcnow().isoformat(), hashlib.sha256(header[7:].encode()).hexdigest()))
+        # Release the session write lock before reading an upload or streaming a
+        # response. Those operations can wait on a slow client for many seconds.
+        db.commit()
         return user
 
     def serve_static(self, path):

@@ -4,6 +4,7 @@ import shutil
 import tempfile
 import threading
 import unittest
+from unittest.mock import patch
 from http.cookiejar import CookieJar
 from http.server import ThreadingHTTPServer
 from pathlib import Path
@@ -159,6 +160,50 @@ class OfflineFlowTests(unittest.TestCase):
         with self.client.open(download, timeout=3) as response:
             with ZipFile(io.BytesIO(response.read())) as zip_file:
                 self.assertEqual(zip_file.read('Exam/main.cpp'), b'int main(){}')
+
+    def test_slow_backup_does_not_hold_session_write_lock(self):
+        backup_token = self.login('hs001', 'password123')
+        submit_token = self.login('hs002', 'password456', self.other_client)
+        boundary = 'exam-test-boundary'
+        payload = (f'--{boundary}\r\nContent-Disposition: form-data; name="files"; '
+                   'filename="Exam/main.cpp"\r\n\r\nint main(){}\r\n'
+                   f'--{boundary}--\r\n').encode()
+        request = Request(self.url + '/api/backup', data=payload, method='POST', headers={
+            'Authorization': f'Bearer {backup_token}',
+            'Content-Type': f'multipart/form-data; boundary={boundary}'})
+        parsing = threading.Event()
+        resume = threading.Event()
+        errors = []
+        parse_folder = server.backup.parse_folder
+
+        def slow_parse(*args):
+            parsing.set()
+            if not resume.wait(5):
+                raise RuntimeError('Backup parsing was not resumed')
+            return parse_folder(*args)
+
+        def upload():
+            try:
+                with self.client.open(request, timeout=8) as response:
+                    self.assertEqual(response.status, 201)
+            except Exception as error:
+                errors.append(error)
+
+        with patch.object(server.backup, 'parse_folder', side_effect=slow_parse):
+            worker = threading.Thread(target=upload, daemon=True)
+            worker.start()
+            try:
+                self.assertTrue(parsing.wait(3))
+                status, _ = self.request('/api/submit', 'POST',
+                                         {'problem': 'SUM', 'language': 'CPP17',
+                                          'source': 'int main(){}'}, submit_token,
+                                         client=self.other_client)
+                self.assertEqual(status, 201)
+            finally:
+                resume.set()
+                worker.join(8)
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(errors, [])
 
     def test_folder_backup_rejects_path_traversal(self):
         token = self.login('hs001', 'password123')
